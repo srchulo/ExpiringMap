@@ -1,0 +1,183 @@
+package com.srchulo.expiringmap;
+
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import java.time.Clock;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+/**
+ * Created by srchulo on 7/11/2017.
+ */
+public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
+    private final Map<K, com.srchulo.expiringmap.Entry<V>> map;
+    private final long defaultTimeToLiveMillis;
+    private final Clock clock;
+    private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    private final Lock readLock = readWriteLock.readLock();
+    private final Lock writeLock = readWriteLock.writeLock();
+
+    public ExpiringMap(long timeToLiveMillis) {
+        this(timeToLiveMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public ExpiringMap(long defaultTimeToLive, TimeUnit timeUnit) {
+        this(defaultTimeToLive, timeUnit, Clock.systemDefaultZone());
+    }
+
+    @VisibleForTesting
+    public ExpiringMap(long defaultTimeToLive, TimeUnit timeUnit, Clock clock) {
+        Preconditions.checkArgument(defaultTimeToLive > 0, "defaultTimeToLive must be positive");
+        Preconditions.checkNotNull(timeUnit, "timeUnit cannot be null");
+
+        map = new HashMap<>();
+        this.defaultTimeToLiveMillis = timeUnit.toMillis(defaultTimeToLive);
+        this.clock = Preconditions.checkNotNull(clock);
+    }
+
+    // locked before and after
+    private void removeExpiredEntries() {
+        for (K key : map.keySet()) {
+            removeIfExpired(key);
+        }
+    }
+
+    private void removeIfExpired(K key) {
+        com.srchulo.expiringmap.Entry entry = map.get(key);
+        if (entry == null || !entry.isExpired()) {
+            return;
+        }
+
+        map.remove(key);
+    }
+
+    @Override
+    public int size() {
+        writeLock.lock();
+        removeExpiredEntries();
+        int size = map.size();
+        writeLock.unlock();
+        return size;
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return size() == 0;
+    }
+
+    @Override
+    public boolean containsKey(Object key) {
+        readLock.lock();
+        com.srchulo.expiringmap.Entry<V> entry = map.get(key);
+        readLock.unlock();
+
+        if (entry == null) {
+            return false;
+        }
+        if (!entry.isExpired()) {
+            return true;
+        }
+
+        remove(key);
+
+        return false;
+    }
+
+    @Override
+    public boolean containsValue(Object value) {
+        return false;
+    }
+
+    @Override
+    public V get(Object key) {
+        readLock.lock();
+        com.srchulo.expiringmap.Entry<V> entry = map.get(key);
+        readLock.unlock();
+
+        if (entry == null || !entry.isExpired()) {
+            return entry.getValue();
+        }
+
+        remove(key);
+        return null;
+    }
+
+    @Override
+    public V put(K key, V value) {
+        return put(key, value, defaultTimeToLiveMillis);
+    }
+
+    public V put(K key, V value, long timeToLiveMillis) {
+        return put(key, value, timeToLiveMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public V put(K key, V value, long timeToLive, TimeUnit timeUnit) {
+        long expiresTime = clock.millis() + timeUnit.toMillis(timeToLive);
+        com.srchulo.expiringmap.Entry<V> entry = new com.srchulo.expiringmap.Entry<>(value, expiresTime, clock);
+        writeLock.lock();
+        map.put(key, entry);
+        writeLock.unlock();
+        return value;
+    }
+
+    @Override
+    public V remove(Object key) {
+        writeLock.lock();
+        com.srchulo.expiringmap.Entry<V> entry = map.remove(key);
+        writeLock.unlock();
+
+        return entry == null ? null : entry.getValue();
+    }
+
+    @Override
+    public void putAll(Map<? extends K, ? extends V> m) {
+
+    }
+
+    @Override
+    public void clear() {
+
+    }
+
+    @Override
+    public Set<K> keySet() {
+        return null;
+    }
+
+    @Override
+    public Collection<V> values() {
+        return null;
+    }
+
+    @Override
+    public Set<Entry<K, V>> entrySet() {
+        return null;
+    }
+
+    @Override
+    public V putIfAbsent(K key, V value) {
+        return null;
+    }
+
+    @Override
+    public boolean remove(Object key, Object value) {
+        return false;
+    }
+
+    @Override
+    public boolean replace(K key, V oldValue, V newValue) {
+        return false;
+    }
+
+    @Override
+    public V replace(K key, V value) {
+        return null;
+    }
+}
