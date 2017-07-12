@@ -6,12 +6,12 @@ import java.time.Clock;
 /**
  * Created by srchulo on 7/11/2017.
  */
-final class Entry<V> {
+final class ExpiringEntry<V> {
     private final V value;
     private final long expiresTime;
     private final Clock clock;
 
-    Entry(V value, long expiresTime, Clock clock) {
+    ExpiringEntry(V value, long expiresTime, Clock clock) {
         this.value = Preconditions.checkNotNull(value);
 
         // allow per entry expiration?
@@ -26,5 +26,9 @@ final class Entry<V> {
 
     boolean isExpired() {
         return clock.millis() > expiresTime;
+    }
+
+    boolean isNotExpired() {
+        return !isExpired();
     }
 }

@@ -5,6 +5,7 @@ import com.google.common.base.Preconditions;
 import java.time.Clock;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
@@ -17,7 +18,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Created by srchulo on 7/11/2017.
  */
 public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
-    private final Map<K, com.srchulo.expiringmap.Entry<V>> map;
+    private final Map<K, ExpiringEntry<V>> map;
     private final long defaultTimeToLiveMillis;
     private final Clock clock;
     private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
@@ -44,18 +45,14 @@ public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
 
     // locked before and after
     private void removeExpiredEntries() {
-        for (K key : map.keySet()) {
-            removeIfExpired(key);
-        }
-    }
+        Iterator<Entry<K, ExpiringEntry<V>>> iterator = map.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Entry<K, ExpiringEntry<V>> entry = iterator.next();
 
-    private void removeIfExpired(K key) {
-        com.srchulo.expiringmap.Entry entry = map.get(key);
-        if (entry == null || !entry.isExpired()) {
-            return;
+            if (entry.getValue().isExpired()) {
+                iterator.remove();
+            }
         }
-
-        map.remove(key);
     }
 
     @Override
@@ -75,13 +72,13 @@ public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
     @Override
     public boolean containsKey(Object key) {
         readLock.lock();
-        com.srchulo.expiringmap.Entry<V> entry = map.get(key);
+        ExpiringEntry<V> expiringEntry = map.get(key);
         readLock.unlock();
 
-        if (entry == null) {
+        if (expiringEntry == null) {
             return false;
         }
-        if (!entry.isExpired()) {
+        if (!expiringEntry.isExpired()) {
             return true;
         }
 
@@ -92,17 +89,31 @@ public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
 
     @Override
     public boolean containsValue(Object value) {
+        readLock.lock();
+
+        try {
+            for (ExpiringEntry<V> expiringEntry : map.values()) {
+                if (!expiringEntry.getValue().equals(value)) {
+                    continue;
+                }
+
+                return expiringEntry.isNotExpired();
+            }
+        } finally {
+            readLock.unlock();
+        }
+
         return false;
     }
 
     @Override
     public V get(Object key) {
         readLock.lock();
-        com.srchulo.expiringmap.Entry<V> entry = map.get(key);
+        ExpiringEntry<V> expiringEntry = map.get(key);
         readLock.unlock();
 
-        if (entry == null || !entry.isExpired()) {
-            return entry.getValue();
+        if (expiringEntry == null || !expiringEntry.isExpired()) {
+            return expiringEntry.getValue();
         }
 
         remove(key);
@@ -120,9 +131,9 @@ public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
 
     public V put(K key, V value, long timeToLive, TimeUnit timeUnit) {
         long expiresTime = clock.millis() + timeUnit.toMillis(timeToLive);
-        com.srchulo.expiringmap.Entry<V> entry = new com.srchulo.expiringmap.Entry<>(value, expiresTime, clock);
+        ExpiringEntry<V> expiringEntry = new ExpiringEntry<>(value, expiresTime, clock);
         writeLock.lock();
-        map.put(key, entry);
+        map.put(key, expiringEntry);
         writeLock.unlock();
         return value;
     }
@@ -130,14 +141,15 @@ public final class ExpiringMap<K, V> implements ConcurrentMap<K, V> {
     @Override
     public V remove(Object key) {
         writeLock.lock();
-        com.srchulo.expiringmap.Entry<V> entry = map.remove(key);
+        ExpiringEntry<V> expiringEntry = map.remove(key);
         writeLock.unlock();
 
-        return entry == null ? null : entry.getValue();
+        return expiringEntry == null ? null : expiringEntry.getValue();
     }
 
     @Override
     public void putAll(Map<? extends K, ? extends V> m) {
+        writeLock.lock();
 
     }
 
